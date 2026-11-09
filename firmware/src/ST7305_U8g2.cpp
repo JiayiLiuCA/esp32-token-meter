@@ -8,6 +8,7 @@
 #define ST7305_BUFFER_ROW_BYTES (ST7305_TILE_WIDTH * 8)
 
 static ST7305_U8g2 *g_lcd_instance = nullptr;
+static bool g_skip_init = false;
 
 static u8x8_display_info_t st7305_display_info = {
   /* chip_enable_level = */ 0,
@@ -121,7 +122,7 @@ uint8_t ST7305_U8g2::u8x8_d_st7305_custom(u8x8_t *u8x8, uint8_t msg, uint8_t arg
       break;
 
     case U8X8_MSG_DISPLAY_INIT:
-      g_lcd_instance->fullInit();
+      if (!g_skip_init) g_lcd_instance->fullInit();
       break;
 
     case U8X8_MSG_DISPLAY_DRAW_TILE: {
@@ -187,8 +188,9 @@ uint8_t ST7305_U8g2::u8x8_d_st7305_custom(u8x8_t *u8x8, uint8_t msg, uint8_t arg
   return 1;
 }
 
-void ST7305_U8g2::begin(uint8_t tile_buf_height, const u8g2_cb_t *rotation)
+void ST7305_U8g2::begin(uint8_t tile_buf_height, const u8g2_cb_t *rotation, bool init_panel)
 {
+  g_skip_init = !init_panel;
   pinMode(_dc, OUTPUT);
   pinMode(_cs, OUTPUT);
   pinMode(_rst, OUTPUT);

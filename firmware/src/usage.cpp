@@ -18,7 +18,6 @@ bool usage_parse(const char *json, size_t len, Usage &out) {
     u.sessions[p] = pair[2].as<uint32_t>();
   }
   u.valid = true;
-  u.rx_ms = millis();
   out = u;
   return true;
 }

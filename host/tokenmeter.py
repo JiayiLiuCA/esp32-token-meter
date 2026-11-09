@@ -4,7 +4,10 @@
 # ///
 """Token Meter host: computes the token and cost totals T3 Code's usage page
 shows (Past 24h / 7 / 30 / 90 days) and pushes them to the
-ESP32-S3-RLCD-4.2 over BLE every 5 minutes.
+ESP32-S3-RLCD-4.2 over BLE. The board sets the cadence: it wakes from deep
+sleep every 5 minutes and advertises for a few seconds; this program scans
+continuously, connects when it shows up, writes one snapshot, and the board
+disconnects and goes back to sleep.
 
 Parity with T3 Code (desktop app bundle, apps/server):
   * records (src/provider/Drivers/claudeUsage.ts): transcript lines with
@@ -45,7 +48,10 @@ SERVICE_UUID = "7e1a0001-6b2c-4d3e-9f10-746f6b6d7472"
 RX_UUID = "7e1a0002-6b2c-4d3e-9f10-746f6b6d7472"
 DEVICE_NAME = "TokenMeter"
 
-PUSH_INTERVAL_S = 300
+# After a push the board sleeps ~5 min; don't scan right away (BlueZ may
+# still report it from its cache).
+PAUSE_AFTER_PUSH_S = 60
+SCAN_TIMEOUT_S = 60
 PERIOD_DAYS = (1, 7, 30, 90)  # 1 = Past 24h (rolling), others calendar days
 HORIZON_DAYS = max(PERIOD_DAYS)
 
@@ -395,14 +401,15 @@ def print_report(sc: Scanner) -> None:
 # --------------------------------------------------------------------------
 # BLE
 
-async def find_device(timeout: float = 10.0):
+async def find_device(timeout: float = SCAN_TIMEOUT_S):
     from bleak import BleakScanner
 
     def match(d, adv):
         return SERVICE_UUID in (adv.service_uuids or []) or (adv.local_name or d.name) == DEVICE_NAME
 
-    # The firmware keeps advertising while a connection slot is free, so a
-    # board the OS is already connected to is still found here.
+    # The board advertises only inside its short sync window; while a slot
+    # is free it keeps advertising, so a board the OS already holds a link
+    # to is still found here.
     return await BleakScanner.find_device_by_filter(match, timeout=timeout)
 
 
@@ -413,27 +420,26 @@ async def run(sc: Scanner) -> None:
     while True:
         dev = await find_device()
         if dev is None:
-            log.info("device not found; retrying in 30s")
-            await asyncio.sleep(30)
+            log.debug("device not seen in %ss; scanning again", SCAN_TIMEOUT_S)
             continue
         log.info("connecting to %s", dev.address)
         disconnected = asyncio.Event()
+        pushed = False
         try:
             async with BleakClient(dev, disconnected_callback=lambda _c: disconnected.set()) as client:
-                log.info("connected")
-                while not disconnected.is_set():
-                    await loop.run_in_executor(None, sc.scan)
-                    snap = snapshot(sc)
-                    await client.write_gatt_char(RX_UUID, encode(snap), response=True)
-                    log.info("sent 24h=%s $%.2f", human(snap["p"][0][0]), snap["p"][0][1] / 100)
-                    try:
-                        await asyncio.wait_for(disconnected.wait(), PUSH_INTERVAL_S)
-                    except asyncio.TimeoutError:
-                        pass
+                await loop.run_in_executor(None, sc.scan)
+                snap = snapshot(sc)
+                await client.write_gatt_char(RX_UUID, encode(snap), response=True)
+                pushed = True
+                log.info("sent 24h=%s $%.2f", human(snap["p"][0][0]), snap["p"][0][1] / 100)
+                # The board disconnects once it has the snapshot.
+                try:
+                    await asyncio.wait_for(disconnected.wait(), 10)
+                except asyncio.TimeoutError:
+                    pass
         except Exception as e:  # noqa: BLE001 - keep the daemon alive
             log.warning("link error: %s", e)
-        log.info("disconnected")
-        await asyncio.sleep(5)
+        await asyncio.sleep(PAUSE_AFTER_PUSH_S if pushed else 1)
 
 
 def main() -> None:

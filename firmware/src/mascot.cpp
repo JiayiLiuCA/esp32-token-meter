@@ -202,13 +202,20 @@ static void start_idle(uint32_t now) {
 
 // ---- public ----
 
-void mascot_begin(uint32_t seed) {
+void mascot_begin(uint32_t seed, bool sleepy) {
   randomSeed(seed);
-  s_sleepy = false;
+  s_sleepy = sleepy;
   s_pose = rest();
   s_n = 0;
   schedule_idle(millis());
 }
+
+void mascot_play_now(uint32_t now) {
+  start_idle(now);
+  schedule_idle(now);
+}
+
+bool mascot_busy() { return s_n != 0; }
 
 void mascot_hop(uint32_t now) {
   s_sleepy = false;

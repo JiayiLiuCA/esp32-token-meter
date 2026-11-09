@@ -1,5 +1,8 @@
 // Copied from Waveshare ESP32-S3-RLCD-4.2 examples (arduino/examples/10_U8G2_Test),
 // https://github.com/waveshareteam/ESP32-S3-RLCD-4.2 — Apache License 2.0.
+// Modified: begin() can skip the panel reset/init (the panel keeps its image
+// and settings through ESP32 deep sleep), and setLowPower() switches the
+// panel between high-power (0x38) and low-power (0x39) refresh.
 #pragma once
 
 #include <Arduino.h>
@@ -30,9 +33,12 @@ public:
 
   // tile_buf_height 0 means full-buffer mode, about 15 KB RAM for 300x400.
   // A smaller value can be used with firstPage()/nextPage(), but this demo uses full-buffer mode.
-  void begin(uint8_t tile_buf_height = 0, const u8g2_cb_t *rotation = U8G2_R0);
+  // init_panel = false: only set up SPI and the frame buffer, leaving the
+  // panel as it is (used when waking from deep sleep).
+  void begin(uint8_t tile_buf_height = 0, const u8g2_cb_t *rotation = U8G2_R0, bool init_panel = true);
   void reset();
   void fullInit();
+  void setLowPower(bool on) { _cmd(on ? 0x39 : 0x38); }
 
   U8G2 *getU8g2()
   {

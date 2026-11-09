@@ -8,7 +8,7 @@ enum Period : uint8_t { P_24H = 0, P_7D, P_30D, P_90D, P_COUNT };
 
 struct Usage {
   bool valid = false;
-  uint32_t rx_ms = 0;  // millis() when the snapshot arrived
+  int64_t rx_ms = 0;  // rtc_ms() when the snapshot arrived (set by the caller)
   uint64_t tokens[P_COUNT] = {};
   uint32_t cents[P_COUNT] = {};
   uint32_t sessions[P_COUNT] = {};  // distinct sessions, as T3 Code counts them

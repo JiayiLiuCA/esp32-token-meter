@@ -29,7 +29,12 @@ struct MascotPose {
   uint8_t bubble_n = 0;     // dots shown (1-3) / z count (1-3)
 };
 
-void mascot_begin(uint32_t seed);
+// `sleepy` restores the state kept across deep sleep without the nod-off blink.
+void mascot_begin(uint32_t seed, bool sleepy = false);
+// Starts one idle action right away (a snore when sleepy).
+void mascot_play_now(uint32_t now_ms);
+// True while an action is playing; false once it is back in the rest pose.
+bool mascot_busy();
 // Advances the current action; returns true when the pose changed.
 bool mascot_tick(uint32_t now_ms);
 // "New usage" hop (also wakes it up).
