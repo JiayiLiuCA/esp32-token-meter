@@ -1,13 +1,14 @@
 // Token Meter: shows the token and cost totals of T3 Code's usage page
 // (Past 24h / 7 / 30 / 90 days) on the Waveshare ESP32-S3-RLCD-4.2.
 //
-// Power: on battery the board deep-sleeps between syncs. Every SYNC_PERIOD
-// it wakes, opens a BLE sync window (the host is scanning and pushes one
+// Power: on battery the board deep-sleeps between syncs. Every sync period
+// (SYNC_FAST_MS while usage is growing, SYNC_SLOW_MS once it has been flat
+// for ACTIVE_FOR_MS) it wakes, opens a BLE sync window (the host is scanning and pushes one
 // snapshot), redraws, plays one mascot action and sleeps again; the panel
 // keeps its image through deep sleep. KEY/BOOT wake it to switch the period.
 // While a computer is on the USB port (SOF frames seen) it stays awake and
-// animates continuously instead, still syncing on the same cadence; this
-// also keeps the serial port up for flashing.
+// animates continuously instead and syncs every SYNC_FAST_MS (no battery
+// to save); this also keeps the serial port up for flashing.
 
 #include <Arduino.h>
 #include <Preferences.h>
@@ -28,7 +29,11 @@ static constexpr int PIN_SCK = 11, PIN_MOSI = 12, PIN_DC = 5, PIN_CS = 40, PIN_R
 static constexpr int PIN_KEY = 18;   // KEY button, active low (RTC GPIO, ext1 wake)
 static constexpr int PIN_BOOT = 0;   // BOOT button, active low (RTC GPIO, ext1 wake)
 
-static constexpr uint32_t SYNC_PERIOD_MS = 5 * 60 * 1000;
+// Sync every minute while tokens are being spent (or on USB power), every
+// 5 minutes once no period's count has grown for ACTIVE_FOR_MS.
+static constexpr uint32_t SYNC_FAST_MS = 60 * 1000;
+static constexpr uint32_t SYNC_SLOW_MS = 5 * 60 * 1000;
+static constexpr int64_t ACTIVE_FOR_MS = 10 * 60 * 1000;
 // Give up on a sync after this long (host not running / out of range).
 static constexpr uint32_t SYNC_WINDOW_MS = 20 * 1000;
 // Let the write response reach the host before the board disconnects.
@@ -37,10 +42,10 @@ static constexpr uint32_t SYNC_LINGER_MS = 150;
 static constexpr uint32_t BUTTON_LINGER_MS = 5 * 1000;
 // usb_serial_jtag_is_connected() needs a moment after boot to see SOFs.
 static constexpr uint32_t USB_DETECT_MS = 1500;
-// Three missed syncs count as stale.
+// Three missed slow syncs count as stale.
 static constexpr int64_t STALE_MS = 15 * 60 * 1000;
 static constexpr uint32_t BATTERY_MS = 60 * 1000;
-// The mascot dozes off when the 24h token count hasn't grown for this long.
+// The mascot dozes off when no period's token count has grown for this long.
 static constexpr int64_t SLEEPY_AFTER_MS = 30 * 60 * 1000;
 
 // Survives deep sleep (not power loss / reset); `magic` tells a valid state
@@ -51,9 +56,9 @@ struct Persist {
   uint32_t magic = 0;
   Usage usage;
   int64_t last_growth_ms = 0;  // rtc_ms()
-  int64_t next_sync_ms = 0;    // rtc_ms()
+  int64_t sync_ms = 0;         // rtc_ms() the last sync window opened
 };
-static constexpr uint32_t PERSIST_MAGIC = 0x746d7031;  // "tmp1"
+static constexpr uint32_t PERSIST_MAGIC = 0x746d7032;  // "tmp2"
 RTC_DATA_ATTR static constinit Persist rtc;
 
 static ST7305_U8g2 lcd(PIN_SCK, PIN_MOSI, PIN_DC, PIN_CS, PIN_RST);
@@ -104,6 +109,14 @@ static uint8_t battery_bars() {
 
 static bool sleepy_now() { return usage.valid && rtc_ms() - rtc.last_growth_ms > SLEEPY_AFTER_MS; }
 
+// Evaluated when deciding to sync or sleep, so the cadence follows activity
+// and USB as they change; the next sync is always relative to the last one.
+static int64_t next_sync_ms() {
+  bool active = usage.valid && rtc_ms() - rtc.last_growth_ms < ACTIVE_FOR_MS;
+  bool fast = active || HWCDC::isPlugged();
+  return rtc.sync_ms + (fast ? SYNC_FAST_MS : SYNC_SLOW_MS);
+}
+
 static void next_tab() {
   ui.tab = (Period)((ui.tab + 1) % P_COUNT);
   prefs.putUChar("tab", ui.tab);
@@ -112,7 +125,7 @@ static void next_tab() {
 static void open_sync() {
   sync_started = millis();
   synced_at = 0;
-  rtc.next_sync_ms = rtc_ms() + SYNC_PERIOD_MS;
+  rtc.sync_ms = rtc_ms();
   ble_open_window();
 }
 
@@ -125,7 +138,7 @@ static void go_to_sleep() {
   gpio_hold_en((gpio_num_t)PIN_CS);
   gpio_deep_sleep_hold_en();
 
-  int64_t left = rtc.next_sync_ms - rtc_ms();
+  int64_t left = next_sync_ms() - rtc_ms();
   if (left < 1000) left = 1000;
   esp_sleep_enable_timer_wakeup((uint64_t)left * 1000);
 
@@ -194,7 +207,7 @@ void setup() {
   ble_begin();
 
   // A button wake doesn't move the sync cadence, unless a sync is due anyway.
-  if (cold || timer_wake || rtc_ms() >= rtc.next_sync_ms) open_sync();
+  if (cold || timer_wake || rtc_ms() >= next_sync_ms()) open_sync();
   if (!button_wake) mascot_play_now(millis());
 
   ui.mascot = mascot_pose();
@@ -211,14 +224,18 @@ void loop() {
 
   size_t n = ble_take_payload(rx, sizeof rx);
   if (n > 0) {
-    uint64_t before = usage.valid ? usage.tokens[P_24H] : 0;
-    bool had = usage.valid;
+    const Usage before = usage;
     if (usage_parse(rx, n, usage)) {
       usage.rx_ms = rtc_ms();
       synced_at = now ? now : 1;
       dirty = true;
-      if (!had) rtc.last_growth_ms = rtc_ms();
-      if (had && usage.tokens[P_24H] > before) {  // new usage: celebrate (and wake up)
+      // Any period growing means new usage. 24h alone can shrink while
+      // tokens are spent (heavier usage rolling off the far end), and the
+      // calendar periods drop at midnight, so check them all.
+      bool grew = false;
+      for (int p = 0; p < P_COUNT; p++) grew |= usage.tokens[p] > before.tokens[p];
+      if (!before.valid) rtc.last_growth_ms = rtc_ms();
+      if (before.valid && grew) {  // new usage: celebrate (and wake up)
         rtc.last_growth_ms = rtc_ms();
         mascot_hop(now);
       }
@@ -236,7 +253,7 @@ void loop() {
       if (timed_out && !synced_at) Serial.println("tokenmeter: no snapshot this window");
       ble_close_window();
     }
-  } else if (rtc_ms() >= rtc.next_sync_ms) {
+  } else if (rtc_ms() >= next_sync_ms()) {
     open_sync();  // only reached while staying awake on USB
   }
 

@@ -5,7 +5,8 @@
 """Token Meter host: computes the token and cost totals T3 Code's usage page
 shows (Past 24h / 7 / 30 / 90 days) and pushes them to the
 ESP32-S3-RLCD-4.2 over BLE. The board sets the cadence: it wakes from deep
-sleep every 5 minutes and advertises for a few seconds; this program scans
+sleep every minute while usage is growing (every 5 minutes once it has been
+flat for 10 minutes) and advertises for a few seconds; this program scans
 continuously, connects when it shows up, writes one snapshot, and the board
 disconnects and goes back to sleep.
 
@@ -48,9 +49,10 @@ SERVICE_UUID = "7e1a0001-6b2c-4d3e-9f10-746f6b6d7472"
 RX_UUID = "7e1a0002-6b2c-4d3e-9f10-746f6b6d7472"
 DEVICE_NAME = "TokenMeter"
 
-# After a push the board sleeps ~5 min; don't scan right away (BlueZ may
-# still report it from its cache).
-PAUSE_AFTER_PUSH_S = 60
+# After a push the board sleeps at least 1 min; don't scan right away (BlueZ
+# may still report it from its cache), but be scanning again well before the
+# next 1-minute wake so the board isn't left advertising.
+PAUSE_AFTER_PUSH_S = 40
 SCAN_TIMEOUT_S = 60
 PERIOD_DAYS = (1, 7, 30, 90)  # 1 = Past 24h (rolling), others calendar days
 HORIZON_DAYS = max(PERIOD_DAYS)
