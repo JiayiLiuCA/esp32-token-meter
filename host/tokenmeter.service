@@ -1,0 +1,11 @@
+[Unit]
+Description=Token Meter host (pushes Claude Code token usage to the RLCD board over BLE)
+After=bluetooth.target
+
+[Service]
+ExecStart=%h/.local/bin/uv run -q %h/dev/my-projects/esp32-tokenmeter/host/tokenmeter.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target
