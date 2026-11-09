@@ -58,6 +58,10 @@ static uint8_t battery_bars() {
 }
 
 void setup() {
+  // Power: 80 MHz is the lowest clock BLE allows and roughly halves the
+  // core's draw versus the default 240 MHz. APB stays 80 MHz, so SPI and
+  // the ADC are unaffected; a full redraw goes from ~12 ms to ~36 ms.
+  setCpuFrequencyMhz(80);
   Serial.begin(115200);
   pinMode(PIN_KEY, INPUT_PULLUP);
   pinMode(PIN_BOOT, INPUT_PULLUP);

@@ -4,6 +4,16 @@
 
 static constexpr size_t RX_MAX = 512;
 
+// Power: the host pushes one snapshot every 5 minutes, so advertising need
+// not be fast. NimBLE's default is 30-60 ms; this is ~1.0-1.2 s (0.625 ms
+// units). The host scans for 10 s, so it still finds the board.
+//
+// The connection interval is deliberately left to the central. Asking for a
+// slower one (updateConnParams, e.g. 300-500 ms) made the Linux host drop the
+// link exactly 40 s after every connect: the kernel rejects anything above
+// le_conn_max_interval (default 70 ms) and the LL procedure then times out.
+static constexpr uint16_t ADV_ITVL_MIN = 1600, ADV_ITVL_MAX = 1920;
+
 static portMUX_TYPE s_mux = portMUX_INITIALIZER_UNLOCKED;
 static char s_buf[RX_MAX + 1];
 static size_t s_len = 0;
@@ -62,6 +72,8 @@ void ble_begin() {
   NimBLEAdvertisementData scan_data;
   scan_data.setName(TM_DEVICE_NAME);
   adv->setScanResponseData(scan_data);
+  adv->setMinInterval(ADV_ITVL_MIN);
+  adv->setMaxInterval(ADV_ITVL_MAX);
   bool ok = adv->start();
   Serial.printf("tokenmeter: advertising %s\n", ok ? "started" : "FAILED");
 }
